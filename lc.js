@@ -35,7 +35,7 @@ const AST = {
     }
 };
 
-function lexer(str) {
+const lexer = (str) => {
     const letterToken = (char) => {
         switch (char) {
             case '\\':
@@ -56,11 +56,8 @@ function lexer(str) {
     };
 
     const isAlpha = (char) => {
-        if (char >= 'a' && char <= 'z'
-         || char >= 'A' && char <= 'Z') {
-            return true;
-        }
-        return false;
+        return char >= 'a' && char <= 'z'
+         || char >= 'A' && char <= 'Z';
     };
     
     const getTokens = (index, tokens, id) => {
@@ -79,13 +76,13 @@ function lexer(str) {
     };
 
     return getTokens(0, [], "");
-}
+};
 
 function parser(tokens) {
     let index = 0;
 
     const currentToken = () => tokens[index];
-    const next = (type) => currentToken()?.type == type;
+    const next = (type) => currentToken()?.type === type;
     const skip = (type) => {
         if (next(type)) {
             index += 1;
@@ -246,5 +243,4 @@ function run(str) {
     return interpriting(parser(lexer(str))).toString();
 }
 
-const input = "(\\x. \\y. x) (\\y. y) (\\x. x)";
-console.log(run(input));
+module.exports = run;
