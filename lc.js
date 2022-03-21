@@ -1,3 +1,5 @@
+const util = require("util");
+
 const token = (type, value) => ({
 	type,
 	value
@@ -7,8 +9,8 @@ const AST = {
     Abstraction(param, body) {
         return {
             id: "Abstraction",
-            param: param,
-            body: body,
+            param,
+            body,
             toString(ctx=[]) {
                 return `(\\${param}. ${body.toString([param].concat(ctx))})`;
             }
@@ -17,8 +19,8 @@ const AST = {
     Application(lhs, rhs) {
         return {
             id: "Application",
-            lhs: lhs,
-            rhs: rhs,
+            lhs,
+            rhs,
             toString(ctx) {
                 return `${lhs.toString(ctx)} ${rhs.toString(ctx)}`;
             }
@@ -27,11 +29,21 @@ const AST = {
     Identifier(name) {
         return {
             id: "Identifier",
-            name: name,
+            name,
             toString(ctx) {
                 return ctx[name];
             }
         };
+    },
+    Definition(name, abs) {
+        return {
+            id: "Definition",
+            name: name,
+            body: abs,
+            toString(ctx) {
+                return `${name} = ${abs.toString(ctx)}`;
+            }
+        }
     }
 };
 
@@ -42,6 +54,8 @@ const lexer = (str) => {
                 return token("LAMBDA");
             case '.':
                 return token("DOT");
+            case '=':
+                return token("EQUAL");
             case '(':
                 return token("LPAREN");
             case ')':
@@ -78,98 +92,157 @@ const lexer = (str) => {
     return getTokens(0, [], "");
 };
 
-function parser(tokens) {
-    let index = 0;
+const parser = (global, tokens) => {
+    const iter = (index) => {
+        const current = () => tokens[index];
+        const next = (type) => current()?.type === type;
+        const skip = (type) => {
+            if (next(type)) {
+                index += 1;
+                return true;
+            } else {
+                return false;
+            }
+        };
+        const match = (type) => {
+            if (next(type)) {
+                index += 1;
+            }
+        };
+        const token = (type) => {
+            if (next(type)) {
+                const value = current().value;
+                index += 1;
+                return value;
+            } else {
+                return null;
+            }
+        };
 
-    const currentToken = () => tokens[index];
-    const next = (type) => currentToken()?.type === type;
-    const skip = (type) => {
-        if (next(type)) {
-            index += 1;
-            return true;
-        } else {
-            return false;
+        return {
+            next,
+            skip,
+            match,
+            token,
+            clone() {
+                return iter(index);
+            }
         }
     };
-    const match = (type) => {
-        if (next(type)) {
-            index += 1;
-        }
-    };
-    const token = (type) => {
-        if (next(type)) {
-            const value = currentToken().value;
-            index += 1;
-            return value;
-        } else {
-            return null;
-        }
-    };
-
-    const term = (ctx) => {
+    
+    const term = (ctx, it) => {
         // term ::= LAMBDA LCID DOT term
         //        | application
-        if (skip("LAMBDA")) {
-            const id = token("LCID");
-            match("DOT");
-            const t = term([id].concat(ctx));
+        if (it.skip("LAMBDA")) {
+            const id = it.token("LCID");
+            it.match("DOT");
+            const t = term({
+                global: ctx.global,
+                local: [id].concat(ctx.local)
+            }, it);
             return AST.Abstraction(id, t);
         } else {
-            return application(ctx);
+            return application(ctx, it);
         }
     };
 
     // application ::= application atom | atom
-    const application = (ctx) => {
-        // application ::= atom application
-        let lhs = atom(ctx);
+    const application = (ctx, it) => {
+        // application ::= atom application'
 
-        while (true) {
+        const application_ = (ctx, it, lhs) => {
             // application' ::= atom application'
             //                | epsilion
-            const rhs = atom(ctx);
-            if (!rhs) {
+            const rhs = atom(ctx, it);
+            if (rhs === null) {
                 return lhs;
             } else {
-                lhs = AST.Application(lhs, rhs);
+                return application_(ctx, it, AST.Application(lhs, rhs));
             }
         }
+
+        return application_(ctx, it, atom(ctx, it));
     };
 
-    const atom = (ctx) => {
+    const atom = (ctx, it) => {
         // atom ::= LPAREN term RPAREN
         //        | LCID
-        if (skip("LPAREN")) {
-            const t = term(ctx);
-            match("RPAREN");
+        if (it.skip("LPAREN")) {
+            const t = term(ctx, it);
+            it.match("RPAREN");
             return t;
-        } else if (next("LCID")) {
-            const id = token("LCID");
-            return AST.Identifier(ctx.indexOf(id));
+        } else if (it.next("LCID")) {
+            const id = it.token("LCID");
+            if (ctx.local.indexOf(id) !== -1) {
+                return AST.Identifier(ctx.local.indexOf(id));
+            } else if (id in ctx.global) {
+                return ctx.global[id];
+            } else {
+                return null;
+            }
         } else {
             return null;
         }
     };
 
-    return term([]);
-}
+    const define = (ctx, it) => {
+        // define ::= LCID EQUAL term
+        if (it.next("LCID")) {
+            const id = it.token("LCID");
+            if (!it.skip("EQUAL")) {
+                return null;
+            }
+            const t = term(ctx, it);
+            return AST.Definition(id, t);
+        } else {
+            return null;
+        }
+    }
 
-function interpriting(ast) {
+    const query = (ctx, it) => {
+        // query ::= define | term
+        if (it.next("LCID")) {
+            const def = define(ctx, it.clone());
+            if (def !== null) {
+                return def;
+            }
+        }
+        return term(ctx, it);
+    }
+
+
+    return query({global, local: []}, iter(0));
+};
+
+// todo : normalize
+const interpriting = (ast, normalize=false) => {
     const isValue = node => node.id === "Abstraction";
 
     const eval = ast => {
-        while (true) {
-            if (ast.id === "Application") {
-                if (isValue(ast.lhs) && isValue(ast.rhs)) {
-                    ast = substitute(ast.rhs, ast.lhs.body);
-                } else if (isValue(ast.lhs)) {
-                    ast.rhs = eval(ast.rhs);
-                } else {
-                    ast.lhs = eval(ast.lhs);
-                }
-            } else {
-                return ast;
+        if (ast.id === "Application") {
+            if (!isValue(ast.lhs)) {
+                ast.lhs = eval(ast.lhs);
             }
+            if (!isValue(ast.rhs)) {
+                ast.rhs = eval(ast.rhs);
+            }
+            // console.log(
+            //     util.inspect(ast, false, null, true)
+            // );
+            // console.log(ast.toString());
+            return eval(substitute(ast.rhs, ast.lhs.body));
+        } else if (ast.id === "Definition") {
+            return AST.Definition(
+                ast.name,
+                eval(ast.body)
+            );
+        } /* else if (normalize && isValue(ast)){
+            return AST.Abstraction(
+                ast.param,
+                eval(ast.body)
+            );
+        } */ else {
+            return ast;
         }
     };
 
@@ -236,11 +309,18 @@ function interpriting(ast) {
         return shift(-1, subst(shift(1, value), node));
     };
 
-    return eval(ast);
-}
 
-function run(str) {
-    return interpriting(parser(lexer(str))).toString();
-}
+    return eval(ast);
+};
+
+const run = (global, str, normalize=false) => {
+    return interpriting(
+        parser(
+            global,
+            lexer(str)
+        ),
+        // normalize
+    );
+};
 
 module.exports = run;

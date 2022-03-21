@@ -6,10 +6,16 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 
+let global = {};
+
 rl.on('line', (input) => {
     if (input === 'q') {
         rl.close();
     } else {
-        console.log(run(input));
+        const expr = run(global, input);
+        console.log(expr.toString());
+        if (expr.id === "Definition") {
+            global[expr.name] = expr.body;
+        }
     }
 });
